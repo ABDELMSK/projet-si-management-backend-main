@@ -150,11 +150,55 @@ const canViewAllProjects = (req, res, next) => {
   
   next();
 };
+const canManageProjectPhases = (req, res, next) => {
+  const user = req.user.fullUser;
+  const projectId = req.params.id;
+  
+  // Chef de projet peut gérer les phases de ses projets
+  // PMO/Admin peuvent gérer toutes les phases
+  if (['Chef de Projet'].includes(user.role_nom)) {
+    // Vérifier si c'est son projet
+    return checkProjectOwnership(projectId, user.id, next);
+  }
+  
+  if (['Administrateur fonctionnel', 'PMO / Directeur de projets'].includes(user.role_nom)) {
+    return next();
+  }
+  
+  return res.status(403).json({
+    success: false,
+    message: 'Permission insuffisante pour gérer les phases'
+  });
+};
 
+const canUploadDocuments = (req, res, next) => {
+  const user = req.user.fullUser;
+  
+  // Tous les utilisateurs connectés peuvent uploader des documents
+  // mais uniquement sur leurs projets (Chef) ou tous (PMO/Admin)
+  next();
+};
+
+const canManageContracts = (req, res, next) => {
+  const user = req.user.fullUser;
+  
+  // Seuls Chef de projet, PMO et Admin peuvent gérer les contrats
+  if (!['Chef de Projet', 'PMO / Directeur de projets', 'Administrateur fonctionnel'].includes(user.role_nom)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Permission insuffisante pour gérer les contrats'
+    });
+  }
+  
+  next();
+};
 module.exports = {
   authenticateToken,
   checkPermission,
   canManageUsers,
   canCreateProject,
-  canViewAllProjects
+  canViewAllProjects,
+  canManageProjectPhases,
+  canManageContracts,
+  canUploadDocuments
 };
