@@ -1,10 +1,13 @@
+
 // server.js
+const multer = require('multer');
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
 const routes = require('./routes');
-
+const projectDetailsRoutes = require('./routes/projects-details');
+const contratsRoutes = require('./routes/contrats');
 // Créer l'application Express
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -32,6 +35,10 @@ app.use((req, res, next) => {
 // Routes principales
 app.use('/api', routes);
 
+app.use('/api/projects', projectDetailsRoutes);
+
+// Routes pour la gestion des contrats (si pas déjà présent)
+app.use('/api', contratsRoutes);
 // Route racine
 app.get('/', (req, res) => {
   res.json({
@@ -72,13 +79,34 @@ app.use((req, res) => {
   });
 });
 
-// Middleware de gestion d'erreurs
-app.use((err, req, res, next) => {
-  console.error('Erreur non gérée:', err);
+
+app.use((error, req, res, next) => {
+  if (error instanceof multer.MulterError) {
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({
+        success: false,
+        message: 'Fichier trop volumineux (maximum 50MB)'
+      });
+    }
+    if (error.code === 'LIMIT_UNEXPECTED_FILE') {
+      return res.status(400).json({
+        success: false,
+        message: 'Champ de fichier inattendu'
+      });
+    }
+  }
+  
+  if (error.message === 'Type de fichier non autorisé') {
+    return res.status(400).json({
+      success: false,
+      message: 'Type de fichier non autorisé'
+    });
+  }
+  
+  console.error('Erreur serveur:', error);
   res.status(500).json({
     success: false,
-    message: 'Erreur serveur interne',
-    ...(process.env.NODE_ENV === 'development' && { error: err.message })
+    message: 'Erreur interne du serveur'
   });
 });
 
@@ -86,6 +114,8 @@ app.use((err, req, res, next) => {
 const startServer = async () => {
   try {
     // Tester la connexion à la base de données
+    const fs = require('fs');
+const path = require('path');
     console.log('🔌 Test de connexion à la base de données...');
     const { testConnection } = require('./config/database');
     const dbConnected = await testConnection();
@@ -93,7 +123,18 @@ const startServer = async () => {
     if (!dbConnected) {
       console.log('⚠️  Base de données non connectée, mais serveur démarré quand même');
     }
+    const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  console.log('📁 Dossier uploads créé');
+}
 
+// Créer le sous-dossier projects
+const projectsUploadsDir = path.join(uploadsDir, 'projects');
+if (!fs.existsSync(projectsUploadsDir)) {
+  fs.mkdirSync(projectsUploadsDir, { recursive: true });
+  console.log('📁 Dossier uploads/projects créé');
+}
     // Démarrer le serveur
     app.listen(PORT, () => {
       console.log('='.repeat(70));

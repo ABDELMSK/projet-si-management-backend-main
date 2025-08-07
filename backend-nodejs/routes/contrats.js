@@ -2,8 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
-const Contrat = require('../models/Contrat');
-const Project = require('../models/Project');
+const { query } = require('../config/database');
 
 // Middleware pour permissions contrats
 const canManageContrats = async (req, res, next) => {
@@ -18,7 +17,7 @@ const canManageContrats = async (req, res, next) => {
     
     // Chef de projet peut gérer les contrats de ses projets
     if (user.role_nom === 'Chef de Projet') {
-      const project = await Project.findById(projectId);
+      const [project] = await query('SELECT chef_projet_id FROM projets WHERE id = ?', [projectId]);
       if (project && project.chef_projet_id === req.user.userId) {
         return next();
       }
@@ -38,7 +37,20 @@ const canManageContrats = async (req, res, next) => {
 router.get('/:projectId/contrats', authenticateToken, async (req, res) => {
   try {
     const { projectId } = req.params;
-    const contrats = await Contrat.findByProject(projectId);
+    console.log(`🔍 Récupération contrats projet ${projectId}`);
+    
+    const contrats = await query(`
+      SELECT 
+        c.*, pr.nom as prestataire_nom, pr.contact_email, pr.contact_telephone,
+        u.nom as created_by_nom
+      FROM contrats c
+      LEFT JOIN prestataires pr ON c.prestataire_id = pr.id
+      LEFT JOIN utilisateurs u ON c.created_by = u.id
+      WHERE c.projet_id = ?
+      ORDER BY c.created_at DESC
+    `, [projectId]);
+    
+    console.log(`✅ ${contrats.length} contrats récupérés`);
     
     res.json({
       success: true,
@@ -64,15 +76,48 @@ router.post('/:projectId/contrats', authenticateToken, canManageContrats, async 
       created_by: req.user.userId
     };
     
-    const contratId = await Contrat.create(contratData);
-    const contrats = await Contrat.findByProject(projectId);
-    const newContrat = contrats.find(c => c.id === contratId);
+    console.log(`🆕 Création contrat pour projet ${projectId}:`, contratData);
     
-    res.status(201).json({
+    const sql = `
+      INSERT INTO contrats (
+        projet_id, numero_contrat, intitule, prestataire_id, montant,
+        date_debut, date_fin, statut, description, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    
+    const values = [
+      projectId,
+      contratData.numero_contrat,
+      contratData.intitule,
+      contratData.prestataire_id || null,
+      contratData.montant || null,
+      contratData.date_debut || null,
+      contratData.date_fin || null,
+      contratData.statut || 'Planifié',
+      contratData.description || null,
+      req.user.userId
+    ];
+    
+    const result = await query(sql, values);
+    
+    // Récupérer le contrat créé avec les informations liées
+    const [newContrat] = await query(`
+      SELECT 
+        c.*, pr.nom as prestataire_nom, u.nom as created_by_nom
+      FROM contrats c
+      LEFT JOIN prestataires pr ON c.prestataire_id = pr.id
+      LEFT JOIN utilisateurs u ON c.created_by = u.id
+      WHERE c.id = ?
+    `, [result.insertId]);
+    
+    console.log(`✅ Contrat créé avec ID ${result.insertId}`);
+    
+    res.json({
       success: true,
       message: 'Contrat créé avec succès',
       data: newContrat
     });
+    
   } catch (error) {
     console.error('❌ Erreur création contrat:', error);
     res.status(500).json({
@@ -83,30 +128,114 @@ router.post('/:projectId/contrats', authenticateToken, canManageContrats, async 
 });
 
 // PUT /api/contrats/:contratId - Mettre à jour un contrat
-router.put('/:contratId', authenticateToken, async (req, res) => {
+router.put('/contrats/:contratId', authenticateToken, async (req, res) => {
   try {
     const { contratId } = req.params;
+    const contratData = req.body;
     
-    // TODO: Ajouter vérification des permissions basée sur le projet du contrat
+    console.log(`🔄 Mise à jour contrat ${contratId}:`, contratData);
     
-    const updated = await Contrat.update(contratId, req.body);
+    const fields = [];
+    const values = [];
     
-    if (!updated) {
-      return res.status(404).json({
+    Object.keys(contratData).forEach(key => {
+      if (contratData[key] !== undefined && key !== 'id') {
+        fields.push(`${key} = ?`);
+        values.push(contratData[key]);
+      }
+    });
+    
+    if (fields.length === 0) {
+      return res.status(400).json({
         success: false,
-        message: 'Contrat non trouvé ou aucune modification'
+        message: 'Aucune donnée à mettre à jour'
       });
     }
+    
+    values.push(contratId);
+    const sql = `UPDATE contrats SET ${fields.join(', ')}, updated_at = NOW() WHERE id = ?`;
+    
+    const result = await query(sql, values);
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Contrat non trouvé'
+      });
+    }
+    
+    console.log(`✅ Contrat ${contratId} mis à jour`);
     
     res.json({
       success: true,
       message: 'Contrat mis à jour avec succès'
     });
+    
   } catch (error) {
     console.error('❌ Erreur mise à jour contrat:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur lors de la mise à jour du contrat'
+    });
+  }
+});
+
+// DELETE /api/contrats/:contratId - Supprimer un contrat
+router.delete('/contrats/:contratId', authenticateToken, async (req, res) => {
+  try {
+    const { contratId } = req.params;
+    
+    console.log(`🗑️ Suppression contrat ${contratId}`);
+    
+    const result = await query('DELETE FROM contrats WHERE id = ?', [contratId]);
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Contrat non trouvé'
+      });
+    }
+    
+    console.log(`✅ Contrat ${contratId} supprimé`);
+    
+    res.json({
+      success: true,
+      message: 'Contrat supprimé avec succès'
+    });
+    
+  } catch (error) {
+    console.error('❌ Erreur suppression contrat:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la suppression du contrat'
+    });
+  }
+});
+
+// GET /api/prestataires - Récupérer tous les prestataires pour les sélections
+router.get('/prestataires', authenticateToken, async (req, res) => {
+  try {
+    console.log('🔍 Récupération liste prestataires');
+    
+    const prestataires = await query(`
+      SELECT id, nom, contact_email, contact_telephone, specialite
+      FROM prestataires
+      WHERE statut = 'Actif'
+      ORDER BY nom
+    `);
+    
+    console.log(`✅ ${prestataires.length} prestataires récupérés`);
+    
+    res.json({
+      success: true,
+      data: prestataires
+    });
+    
+  } catch (error) {
+    console.error('❌ Erreur récupération prestataires:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la récupération des prestataires'
     });
   }
 });
